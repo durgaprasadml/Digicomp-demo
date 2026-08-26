@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 350" width="100%" height="100%">
+  <rect width="500" height="350" rx="16" fill="#f8fafc"/>
+  <rect x="20" y="20" width="460" height="310" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+  
+  <g transform="translate(90, 40)">
+    <!-- Soil Probe Board (Elongated shape with prongs) -->
+    <path d="M 120 10 H 200 V 120 L 180 270 L 160 270 L 140 120 V 10 Z" fill="#15803d" stroke="#166534" stroke-width="3"/>
+
+    <!-- Fork Cutout Gap -->
+    <path d="M 155 130 H 165 V 250 H 155 Z" fill="#ffffff"/>
+
+    <!-- Circuitry at Top -->
+    <rect x="130" y="25" width="60" height="60" rx="4" fill="#0f172a"/>
+    <circle cx="160" cy="55" r="8" fill="#22c55e"/>
+
+    <!-- White PH2.0 Connector at top edge -->
+    <rect x="135" y="-5" width="50" height="25" rx="3" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+    <circle cx="147" cy="7" r="3" fill="#334155"/>
+    <circle cx="160" cy="7" r="3" fill="#334155"/>
+    <circle cx="173" cy="7" r="3" fill="#334155"/>
+
+    <!-- Plant Graphic Leaf icon overlay -->
+    <path d="M 70 160 C 70 120, 110 120, 110 160 C 110 180, 70 200, 70 200 C 70 200, 30 180, 30 160 C 30 120, 70 120, 70 160 Z" fill="#22c55e" opacity="0.8"/>
+  </g>
+</svg>

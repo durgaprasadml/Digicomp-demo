@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 350" width="100%" height="100%">
+  <rect width="500" height="350" rx="16" fill="#f8fafc"/>
+  <rect x="20" y="20" width="460" height="310" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+  
+  <g transform="translate(80, 80)">
+    <!-- Pump Main Housing Cylinder -->
+    <rect x="80" y="40" width="200" height="110" rx="20" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
+
+    <!-- Front Nozzle / Outlet Port -->
+    <rect x="280" y="75" width="60" height="40" rx="6" fill="#0284c7" stroke="#0369a1" stroke-width="2"/>
+    <ellipse cx="340" cy="95" rx="6" ry="16" fill="#38bdf8"/>
+
+    <!-- Vertical Top Inlet Port -->
+    <rect x="150" y="-10" width="40" height="50" rx="6" fill="#0284c7" stroke="#0369a1" stroke-width="2"/>
+
+    <!-- Water Drop Icon Graphic -->
+    <path d="M 180 80 C 180 70, 160 50, 160 50 C 160 50, 140 70, 140 80 C 140 90, 150 100, 160 100 C 170 100, 180 90, 180 80 Z" fill="#38bdf8"/>
+
+    <!-- Power Cable Wires -->
+    <path d="M 80 95 C 40 95, 20 120, -10 120" fill="none" stroke="#ef4444" stroke-width="5"/>
+    <path d="M 80 105 C 40 105, 20 135, -10 135" fill="none" stroke="#000000" stroke-width="5"/>
+
+    <text x="180" y="130" font-family="sans-serif" font-weight="bold" font-size="12" fill="#ffffff" text-anchor="middle">12V WATER PUMP</text>
+  </g>
+</svg>

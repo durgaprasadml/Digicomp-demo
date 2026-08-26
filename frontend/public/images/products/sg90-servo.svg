@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 350" width="100%" height="100%">
+  <rect width="500" height="350" rx="16" fill="#f8fafc"/>
+  <rect x="20" y="20" width="460" height="310" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+  
+  <g transform="translate(130, 50)">
+    <!-- Main Servo Body (Translucent Blue) -->
+    <rect x="30" y="60" width="170" height="150" rx="8" fill="#0284c7" fill-opacity="0.9" stroke="#0369a1" stroke-width="2"/>
+    
+    <!-- Mounting Ears Side Flanges -->
+    <rect x="0" y="110" width="30" height="25" fill="#0284c7"/>
+    <circle cx="12" cy="122.5" r="5" fill="#f8fafc"/>
+
+    <rect x="200" y="110" width="30" height="25" fill="#0284c7"/>
+    <circle cx="218" cy="122.5" r="5" fill="#f8fafc"/>
+
+    <!-- Gear Tower Cylinder Top Left -->
+    <circle cx="80" cy="50" r="35" fill="#0284c7"/>
+    <circle cx="80" cy="50" r="22" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="2"/>
+
+    <!-- White Plastic Servo Horn Rotor (Dual Arm) -->
+    <g transform="translate(80, 50) rotate(25)">
+      <path d="M -60 -10 H 60 C 65 -10, 70 0, 60 10 H -60 C -70 10, -70 -10, -60 -10 Z" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="10" fill="#cbd5e1"/>
+      <circle cx="-45" cy="0" r="3" fill="#64748b"/>
+      <circle cx="-25" cy="0" r="3" fill="#64748b"/>
+      <circle cx="25" cy="0" r="3" fill="#64748b"/>
+      <circle cx="45" cy="0" r="3" fill="#64748b"/>
+    </g>
+
+    <!-- 3-Wire Ribbon Cable Lead Bottom -->
+    <path d="M 170 210 C 170 250, 100 240, 60 270" fill="none" stroke="#78350f" stroke-width="4"/>
+    <path d="M 175 210 C 175 255, 105 245, 65 275" fill="none" stroke="#dc2626" stroke-width="4"/>
+    <path d="M 180 210 C 180 260, 110 250, 70 280" fill="none" stroke="#f59e0b" stroke-width="4"/>
+
+    <text x="115" y="130" font-family="sans-serif" font-weight="bold" font-size="14" fill="#ffffff" text-anchor="middle">SG90 9g</text>
+  </g>
+</svg>
