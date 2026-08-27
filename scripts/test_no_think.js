@@ -1,4 +1,4 @@
-const MODEL = process.env.AI_MODEL || "gemma3:270m";
+const MODEL = process.env.AI_MODEL || "qwen3.5:0.8b";
 
 const SYSTEM_PROMPT = `You are DigiComp AI, a helpful conversational assistant for DigiComp — an electronics and microcontroller store.
 

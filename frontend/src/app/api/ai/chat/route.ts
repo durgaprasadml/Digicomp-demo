@@ -4,7 +4,7 @@ import { getAuthenticatedUser } from '@/lib/auth-server';
 import { Product } from '@/types/product';
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/chat';
-const MODEL = process.env.AI_MODEL || process.env.MODEL_NAME || 'gemma3:270m';
+const MODEL = process.env.AI_MODEL || process.env.MODEL_NAME || 'qwen3.5:0.8b';
 const TIMEOUT_SECONDS = parseInt(process.env.AI_TIMEOUT_SECONDS || '120', 10) || 120;
 const TIMEOUT_MS = TIMEOUT_SECONDS * 1000;
 
@@ -139,6 +139,7 @@ async function callOllama(messages: any[], tools?: any[], numPredict = 350, sign
     model: MODEL,
     messages,
     stream: false,
+    think: false,
     options: {
       temperature: 0.2,
       num_predict: numPredict,
@@ -156,7 +157,7 @@ async function callOllama(messages: any[], tools?: any[], numPredict = 350, sign
     body: JSON.stringify(payload),
   });
 
-  // If model does not support native tools (e.g. gemma3:270m), retry cleanly without tools
+  // If model does not support native tools, retry cleanly without tools
   if (!res.ok && tools) {
     const errText = await res.text().catch(() => '');
     if (res.status === 400 && errText.includes('does not support tools')) {
@@ -394,7 +395,7 @@ export async function POST(request: NextRequest) {
         const rawContent2 = data2?.message?.content || '';
         answer = cleanFinalAssistantAnswer(rawContent2);
       } else {
-        // Model responded with text (e.g. gemma3:270m)
+        // Model responded with text directly
         clearTimeout(timeout);
         const rawContent1 = msg1?.content || '';
         const cleaned1 = cleanFinalAssistantAnswer(rawContent1);

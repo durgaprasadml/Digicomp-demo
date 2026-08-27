@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-MODEL = os.environ.get("AI_MODEL") or os.environ.get("MODEL_NAME") or "gemma3:270m"
+MODEL = os.environ.get("AI_MODEL") or os.environ.get("MODEL_NAME") or "qwen3.5:0.8b"
 
 logger = logging.getLogger("digicomp.ai")
 
@@ -137,6 +137,7 @@ def query_ollama(messages: list, tools: list = None, num_predict: int = 350, tem
         "model": MODEL,
         "messages": messages,
         "stream": False,
+        "think": False,
         "options": {
             "temperature": temperature,
             "num_predict": num_predict,
@@ -157,7 +158,7 @@ def query_ollama(messages: list, tools: list = None, num_predict: int = 350, tem
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
-        # If model does not support tools (e.g. gemma3:270m), retry cleanly without tools
+        # If model does not support tools, retry cleanly without tools
         if tools and err.code == 400:
             err_body = err.read().decode("utf-8", errors="ignore")
             if "does not support tools" in err_body:

@@ -16,7 +16,7 @@ init_db()
 seed_products(PRODUCTS)
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-MODEL = os.environ.get("AI_MODEL") or "gemma3:270m"
+MODEL = os.environ.get("AI_MODEL") or "qwen3.5:0.8b"
 
 TOOLS = [
     {

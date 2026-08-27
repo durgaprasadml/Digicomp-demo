@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 const OLLAMA_TAGS_URL = process.env.OLLAMA_TAGS_URL || 'http://127.0.0.1:11434/api/tags';
-const TARGET_MODEL = process.env.AI_MODEL || process.env.MODEL_NAME || 'gemma3:270m';
+const TARGET_MODEL = process.env.AI_MODEL || process.env.MODEL_NAME || 'qwen3.5:0.8b';
 
 export async function GET() {
   try {

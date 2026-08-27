@@ -1,14 +1,14 @@
-// Test script for verifying gemma3:270m integration across Next.js and Ollama
+// Test script for verifying qwen3.5:0.8b integration across Next.js and Ollama
 const http = require('http');
 
-const MODEL = process.env.AI_MODEL || 'gemma3:270m';
+const MODEL = process.env.AI_MODEL || 'qwen3.5:0.8b';
 
 async function queryChatRouteDirectly(userMessage, history = []) {
   // Direct test of the Next.js chat route logic
   const payload = JSON.stringify({
     message: userMessage,
     history: history,
-    conversationId: `test-gemma3-${Date.now()}`,
+    conversationId: `test-qwen-${Date.now()}`,
   });
 
   return new Promise((resolve, reject) => {

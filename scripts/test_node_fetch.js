@@ -18,7 +18,7 @@ async function testFetch(prompt) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: process.env.AI_MODEL || "gemma3:270m",
+        model: process.env.AI_MODEL || "qwen3.5:0.8b",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: prompt }

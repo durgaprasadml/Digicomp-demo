@@ -2,29 +2,27 @@
 
 A small end-to-end demo of an AI shopping/project assistant:
 
-User -> Gemma 3 270M -> component requirements -> SQLite product search -> Gemma 3 final response -> product cards
+User -> Qwen 3.5 0.8B -> component requirements -> SQLite product search -> Qwen 3.5 final response -> product cards
 
 ## Requirements
 
 - Python 3.10+
 - Ollama
-- Gemma 3 270M model (`gemma3:270m` - default) or Qwen3 (`qwen3:1.7b` / `qwen3:4b` - fallback)
+- Qwen 3.5 0.8B model (`qwen3.5:0.8b`)
 
-## 1. Install Ollama and Gemma 3 270M
+## 1. Install Ollama and Qwen 3.5 0.8B
 
 Install Ollama, then pull the active model:
 
 ```bash
-ollama pull gemma3:270m
+ollama pull qwen3.5:0.8b
 ```
 
 Verify:
 
 ```bash
-ollama run gemma3:270m
+ollama run qwen3.5:0.8b
 ```
-
-*(Optional fallback: If you want to use Qwen models, run `ollama pull qwen3:1.7b` or `ollama pull qwen3:4b`)*
 
 ## 2. Set up Python
 
@@ -45,15 +43,11 @@ pip install -r requirements.txt
 
 ## 3. Model Configuration
 
-The application uses `gemma3:270m` by default for ultra-lightweight, high-speed conversational responses. You can configure the active model via environment variables without changing source code:
+The application uses `qwen3.5:0.8b` by default for ultra-lightweight, high-speed conversational responses. You can configure the active model via environment variables without changing source code:
 
 ```bash
-# Default active model (ultra-fast 270M parameter model):
-export AI_MODEL=gemma3:270m
-
-# Switch to other models if needed:
-export AI_MODEL=qwen3:1.7b
-export AI_MODEL=qwen3:4b
+# Default active model:
+export AI_MODEL=qwen3.5:0.8b
 ```
 
 ## 4. Start the backend
@@ -99,7 +93,7 @@ Try:
 
 The assistant is intentionally split into two responsibilities:
 
-1. Gemma 3 270M extracts the user's intent and generic component requirements.
+1. Qwen 3.5 0.8B extracts the user's intent and generic component requirements.
 2. The backend searches ONLY the DigiComp catalog stored in the local database.
 
 The LLM does not generate product names, prices, stock, images, or URLs.

@@ -4,7 +4,7 @@ import json
 import time
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-MODEL = os.environ.get("AI_MODEL") or os.environ.get("MODEL_NAME") or "gemma3:270m"
+MODEL = os.environ.get("AI_MODEL") or os.environ.get("MODEL_NAME") or "qwen3.5:0.8b"
 
 SYSTEM_PROMPT = "You are DigiComp AI, a helpful conversational assistant for an electronics and microcontroller e-commerce store. Answer user questions naturally. You have access to a tool `search_digicomp_products` to search our SQLite database for products when relevant."
 

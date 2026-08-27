@@ -1,6 +1,6 @@
 // Directly tests Ollama with think:false to confirm message.content is always populated
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
-const MODEL = process.env.AI_MODEL || "gemma3:270m";
+const MODEL = process.env.AI_MODEL || "qwen3.5:0.8b";
 
 const SYSTEM_PROMPT = `/no_think
 You are DigiComp AI, a helpful conversational assistant for DigiComp — an electronics and microcontroller e-commerce store.

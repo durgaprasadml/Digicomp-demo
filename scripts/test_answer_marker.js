@@ -1,6 +1,6 @@
 // Direct Ollama test: verify ANSWER: marker + think:false + num_predict:200
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
-const MODEL = process.env.AI_MODEL || "gemma3:270m";
+const MODEL = process.env.AI_MODEL || "qwen3.5:0.8b";
 
 const SYSTEM_PROMPT = `You are DigiComp AI, a helpful electronics assistant for DigiComp store.
 

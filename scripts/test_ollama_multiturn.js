@@ -1,5 +1,5 @@
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/chat";
-const MODEL = process.env.AI_MODEL || "gemma3:270m";
+const MODEL = process.env.AI_MODEL || "qwen3.5:0.8b";
 
 const SYSTEM_PROMPT = `You are DigiComp AI, an expert conversational assistant for DigiComp, an electronics and microcontroller distributor.
 Answer user questions naturally, conversationally, and concisely.
