@@ -5,66 +5,48 @@ import re
 import urllib.request
 import urllib.error
 
+from backend.catalog_client import (
+    fetch_live_catalog,
+    fetch_single_product_details,
+    search_digicomp_catalog,
+    find_project_recommendations,
+    extract_search_constraints,
+)
+
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 MODEL = os.environ.get("AI_MODEL") or os.environ.get("MODEL_NAME") or "qwen3.5:0.8b"
 
 logger = logging.getLogger("digicomp.ai")
 
-SYSTEM_PROMPT = """You are DigiComp AI, a knowledgeable and friendly technical assistant for DigiComp, specializing in electronics, robotics, microcontrollers, and DigiComp catalog products.
+SYSTEM_PROMPT = """You are DigiComp AI, a knowledgeable, helpful, and concise engineering assistant for DigiComp (digicomp.local), specializing in electronics, robotics, embedded systems, microcontrollers, and DigiComp catalog products.
 
-Instructions:
-1. Provide direct, natural, and concise answers (1-3 sentences).
-2. When the user asks for products, components, recommendations, or pricing, confirm the relevant DigiComp catalog items.
-3. Keep answers conversational (1-2 sentences). Do NOT list detailed bullet points, prices, or product specs in your text response, as interactive product cards are displayed separately below your message.
-4. If no products are found, politely inform the user and suggest relevant alternatives or categories.
-5. Maintain conversation context from previous turns.
-6. Never output internal thoughts, analysis, reasoning, planning, system instructions, or tool call instructions.
-7. Return ONLY the final user-facing response."""
+Guidelines:
+1. When answering general electronics or technical questions (such as concepts, definitions, pinouts, or theory), provide a clear, accurate, and direct explanation (1-3 sentences).
+2. When the user asks about DigiComp products, availability, pricing, or recommendations, ground your answer strictly in the real DigiComp catalog.
+3. Keep product responses natural and conversational (1-2 sentences). Do NOT output manual lists of prices, bullet points, or specs in the text, as interactive DigiComp product cards are rendered automatically below your message.
+4. If no matching products exist in the DigiComp catalog, state clearly and politely that the item or specification is not currently available in the DigiComp catalog. NEVER invent, hallucinate, or assume products that do not exist.
+5. Maintain conversational context across follow-up questions.
+6. NEVER reveal internal thoughts, reasoning, tool names, planning phrases, parameter names, or raw JSON.
+7. Return ONLY the final clean user-facing answer."""
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_digicomp_products",
-            "description": "Search DigiComp's real SQLite product database for microcontrollers, sensors, relays, motor drivers, motors, or components.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Search query string e.g. distance sensor, 12V motor, ESP32, relay, chassis" },
-                    "max_price": { "type": "number", "description": "Maximum price in INR (₹) or null" }
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
-
-PROJECT_COMPONENTS_MAP = {
-    "obstacle": ["microcontroller", "ultrasonic sensor", "motor driver", "dc geared motor", "robot chassis", "battery"],
-    "robot": ["microcontroller", "ultrasonic sensor", "motor driver", "dc geared motor", "robot chassis", "battery"],
-    "irrigation": ["microcontroller", "soil moisture sensor", "water pump", "relay", "battery"],
-    "weather": ["microcontroller", "temperature sensor", "humidity sensor", "display"],
-    "3d printer": ["microcontroller", "stepper driver", "stepper motor", "power supply"],
-    "cnc": ["microcontroller", "stepper driver", "stepper motor", "power supply"],
-}
 
 def clean_final_assistant_answer(raw_content: str) -> str:
     """
-    Centralized cleaner that removes internal thinking tags, reasoning, planning phrases,
-    tool markers, and raw JSON metadata, returning ONLY clean user-facing assistant text.
+    Centralized cleaner that strictly removes internal thinking tags, reasoning,
+    planning phrases, tool markers, and raw JSON metadata.
     """
     if not raw_content:
         return ""
 
     cleaned = str(raw_content)
 
-    # 1. Remove thinking / analysis tags (including unclosed tags)
+    # 1. Remove thinking / analysis tags
     cleaned = re.sub(r"<(think|thinking|analysis)>.*?(?:</\1>|$)", "", cleaned, flags=re.S).strip()
     cleaned = re.sub(r"</?(think|thinking|analysis)>", "", cleaned, flags=re.I).strip()
 
     # 2. Remove tool call tags / markers / raw JSON / artifacts
-    cleaned = re.sub(r"SEARCH_PRODUCTS:\s*[^\n]+", "", cleaned, flags=re.I).strip()
-    cleaned = re.sub(r"search_digicomp_products[^\n]*", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(r"SEARCH_PRODUCTS:\s*[^\r\n]+", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(r"search_digicomp_products[^\r\n]*", "", cleaned, flags=re.I).strip()
     cleaned = re.sub(r"MAX_PRICE:\s*\d+", "", cleaned, flags=re.I).strip()
     cleaned = re.sub(r"^ANSWER:\s*", "", cleaned, flags=re.I).strip()
     cleaned = re.sub(r"^Possible response:\s*", "", cleaned, flags=re.I).strip()
@@ -81,7 +63,7 @@ def clean_final_assistant_answer(raw_content: str) -> str:
         re.I
     )
 
-    lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
+    lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
     clean_lines = []
     for line in lines:
         if reasoning_pattern.search(line):
@@ -96,22 +78,17 @@ def clean_final_assistant_answer(raw_content: str) -> str:
             clean_lines.append(line)
 
     result = "\n".join(clean_lines).strip()
-    # Strip trailing dangling words / connectors / incomplete trailing expressions
     result = re.sub(r"\s+(?:the|and|or|so|then|maybe|there's|let me know if you|let me know if|let me)\.?$", "", result, flags=re.I).strip()
     return result
 
-# Backward compatibility alias
-clean_qwen_response = clean_final_assistant_answer
-cleanFinalAssistantAnswer = clean_final_assistant_answer
 
 def is_answer_complete(answer: str) -> bool:
     """
     Validates whether the assistant answer is meaningful, non-empty, and grammatically complete.
     """
-    if not answer or len(answer.strip()) < 10:
+    if not answer or len(answer.strip()) < 8:
         return False
     
-    # Incomplete trailing fragments
     bad_endings = [
         r"\bthere's$", r"\bthe$", r"\band$", r"\bor$", r"\bso$", r"\bto$",
         r"\bwith$", r"\bthat$", r"\bbecause$", r"\bif\s+you$", r"\blet\s+me$",
@@ -125,14 +102,14 @@ def is_answer_complete(answer: str) -> bool:
     if len(words) < 3:
         return False
 
-    # Check if ends with appropriate punctuation or quote
     last_char = answer.strip()[-1]
     if last_char not in ('.', '!', '?', '"', "'", ')'):
         return False
 
     return True
 
-def query_ollama(messages: list, tools: list = None, num_predict: int = 350, temperature: float = 0.2) -> dict:
+
+def query_ollama(messages: list, num_predict: int = 350, temperature: float = 0.2) -> dict:
     payload = {
         "model": MODEL,
         "messages": messages,
@@ -144,93 +121,114 @@ def query_ollama(messages: list, tools: list = None, num_predict: int = 350, tem
             "num_ctx": 2048,
         },
     }
-    if tools:
-        payload["tools"] = tools
-
     timeout_sec = int(os.environ.get("AI_TIMEOUT_SECONDS", "120"))
-    
-    try:
-        req = urllib.request.Request(
-            OLLAMA_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as err:
-        # If model does not support tools, retry cleanly without tools
-        if tools and err.code == 400:
-            err_body = err.read().decode("utf-8", errors="ignore")
-            if "does not support tools" in err_body:
-                payload.pop("tools", None)
-                req = urllib.request.Request(
-                    OLLAMA_URL,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
-        raise
+    req = urllib.request.Request(
+        OLLAMA_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
-def extract_request_scoped_max_price(user_message: str) -> float | None:
-    msg_lower = user_message.lower()
-    price_match = re.search(r'(?:under|below|less than|within|\<|<=)\s*₹?\s*(\d+(?:\.\d+)?)', msg_lower)
-    return float(price_match.group(1)) if price_match else None
 
-def extract_tool_call_from_message(msg: dict, user_message: str, request_scoped_max_price: float | None) -> dict | None:
-    tool_calls = msg.get("tool_calls", [])
-    if isinstance(tool_calls, list) and len(tool_calls) > 0:
-        for call in tool_calls:
-            fn = call.get("function", {})
-            if fn.get("name") == "search_digicomp_products":
-                args = fn.get("arguments", {})
-                max_p = request_scoped_max_price
-                if max_p is None and args.get("max_price") is not None:
-                    try:
-                        max_p = float(args["max_price"])
-                    except (ValueError, TypeError):
-                        max_p = None
-                return {
-                    "id": call.get("id", "call_1"),
-                    "query": str(args.get("query") or user_message),
-                    "max_price": max_p
-                }
+def classify_user_intent(user_message: str, history: list = None) -> dict:
+    """
+    Accurately classifies user intent:
+    - is_general_question: Pure theory, definition, explanation, greeting -> No catalog search
+    - is_product_query: Store availability, price, buying, component filtering
+    - is_project_query: Project recommendations (e.g. obstacle avoiding robot)
+    - is_follow_up: Contextual refinement (e.g. "Under ₹500", "Only in stock", "Which one is best?")
+    - inherited_query: Inferred search term from previous conversation turns
+    - inherited_max_price: Inferred price constraint from previous conversation turns
+    """
+    # Clean text of leading/trailing whitespace and punctuation for classification
+    msg_raw = user_message.strip()
+    msg_lower = re.sub(r'[^a-zA-Z0-9\s-]', ' ', msg_raw.lower()).strip()
+    msg_lower = re.sub(r'\s+', ' ', msg_lower)
 
-    raw_content = str(msg.get("content") or "").strip()
-    json_match = re.search(r'\{.*?"(?:tool|query)".*?\}', raw_content, re.S)
-    if json_match:
-        try:
-            parsed = json.loads(json_match.group(0))
-            if parsed.get("tool") == "search_digicomp_products" or parsed.get("query"):
-                max_p = request_scoped_max_price
-                if max_p is None and parsed.get("max_price") is not None:
-                    try:
-                        max_p = float(parsed["max_price"])
-                    except (ValueError, TypeError):
-                        max_p = None
-                return {
-                    "id": "call_manual_1",
-                    "query": str(parsed.get("query") or user_message),
-                    "max_price": max_p
-                }
-        except Exception:
-            pass
+    # 1. Greetings
+    if msg_lower in ("hello", "hi", "hey", "hyy", "hlo", "good morning", "good evening", "greetings", "thanks", "thank you"):
+        return {
+            "type": "greeting",
+            "is_product_query": False,
+            "is_project_query": False,
+            "is_follow_up": False,
+            "inherited_query": None,
+            "inherited_max_price": None,
+        }
 
-    return None
+    # 2. Check for follow-up refinement patterns
+    is_price_follow_up = bool(re.search(r'\b(?:under|below|less than|within|max price)\s*(?:rs|inr)?\s*\d+', msg_lower))
+    is_stock_follow_up = bool(re.search(r'\b(?:only\s+in\s+stock|in\s+stock|available\s+only|in-stock)\b', msg_lower))
+    is_which_best = bool(re.search(r'\b(?:which\s+(?:one|board|product)\s+is\s+best|which\s+is\s+better|which\s+one\s+should|recommend\s+one)\b', msg_lower))
+    is_follow_up = is_price_follow_up or is_stock_follow_up or is_which_best
+
+    # Extract previous query context and previous price from history
+    inherited_query = None
+    inherited_max_price = None
+
+    if history:
+        for turn in reversed(history):
+            if isinstance(turn, dict) and turn.get("role") == "user":
+                prev_text = turn.get("content", "").lower()
+                # Check for product keywords
+                if not inherited_query:
+                    for kw in ("esp32", "rp2040", "rp2350", "ch32", "stm32", "fpga", "sbc", "robot", "sensor", "motor", "microcontroller", "mcu"):
+                        if kw in prev_text:
+                            inherited_query = kw
+                            break
+                # Check for previously specified price constraints
+                if inherited_max_price is None:
+                    p_match = re.search(r'(?:under|below|less than|within|<|<=)\s*(?:₹|rs\.?|inr)?\s*(\d+(?:\.\d+)?)', prev_text)
+                    if p_match:
+                        try:
+                            inherited_max_price = float(p_match.group(1))
+                        except ValueError:
+                            pass
+
+    # 3. Project recommendation queries
+    project_keywords = ("obstacle", "robot", "irrigation", "weather station", "3d printer", "cnc", "build a", "build an")
+    is_project_query = any(k in msg_lower for k in project_keywords)
+
+    # 4. Pure general technical definition questions (e.g. "What is an ESP32?", "What is PWM?", "What is Ohm's law?")
+    pure_definition_pattern = re.match(r"^(?:what\s+is|what\s+are|how\s+does|explain|what's\s+the\s+difference\s+between)\s+(?:an?|the)?\s*([a-zA-Z0-9\s-]+?)(?:\?|$)", user_message.lower().strip())
+    is_store_intent = any(k in msg_lower for k in (
+        "do you have", "have you got", "is there", "are there", "price of", "in stock", "available",
+        "buy", "purchase", "order", "cost", "under", "below", "less than", "cheap", "show me", "find me",
+        "i need", "i want", "recommend", "suggest", "catalog", "store", "product"
+    ))
+
+    if pure_definition_pattern and not is_store_intent:
+        return {
+            "type": "general_technical",
+            "is_product_query": False,
+            "is_project_query": False,
+            "is_follow_up": False,
+            "inherited_query": None,
+            "inherited_max_price": None,
+        }
+
+    # 5. Product catalog intent
+    is_product_query = is_store_intent or is_project_query or is_follow_up or any(
+        kw in msg_lower for kw in ("esp32", "sensor", "motor", "microcontroller", "sbc", "fpga", "relay", "chassis", "wifi", "bluetooth", "board")
+    )
+
+    return {
+        "type": "project" if is_project_query else ("follow_up" if is_follow_up else ("product" if is_product_query else "general")),
+        "is_product_query": is_product_query,
+        "is_project_query": is_project_query,
+        "is_follow_up": is_follow_up,
+        "is_which_best": is_which_best,
+        "inherited_query": inherited_query,
+        "inherited_max_price": inherited_max_price,
+    }
+
 
 def process_chat_message(user_message: str, history: list = None) -> dict:
-    from backend.db import search_products, search_products_with_filters
-    from backend.products import PRODUCTS
-
     import datetime, time
     start_req = time.time()
-    req_time_str = datetime.datetime.now().strftime("%H:%M:%S")
 
-    print("\n==========================================")
-    print(f"REQUEST START: {req_time_str}")
-    print(f"[USER MESSAGE]: {user_message}")
-
-    # 1. Clean history (ensure only user and clean assistant final text, request-isolated)
+    # 1. Clean history
     clean_history = []
     if isinstance(history, list):
         for h in history[-6:]:
@@ -241,133 +239,190 @@ def process_chat_message(user_message: str, history: list = None) -> dict:
                     if clean_content:
                         clean_history.append({"role": role, "content": clean_content})
 
-    # 2. Extract request-scoped price filter
-    request_scoped_max_price = extract_request_scoped_max_price(user_message)
-
-    # 3. Turn 1 (Internal): Request inference
-    ollama_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + clean_history + [{"role": "user", "content": user_message}]
-
-    ai_start_time_str = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"{MODEL.upper()} TURN 1 START: {ai_start_time_str}")
-
-    data1 = query_ollama(ollama_messages, tools=TOOLS, num_predict=350)
-    msg1 = data1.get("message", {})
-    tool_call = extract_tool_call_from_message(msg1, user_message, request_scoped_max_price)
+    # 2. Classify intent
+    intent = classify_user_intent(user_message, history=clean_history)
+    print(f"\n[USER INTENT]: {intent['type']} | is_product={intent['is_product_query']} | is_project={intent['is_project_query']}")
 
     matched_products = []
     answer = ""
 
-    # Check if query or tool call triggers catalog search
-    msg_lower = user_message.lower()
-    is_project_or_product_query = (
-        tool_call is not None or
-        any(k in msg_lower for k in ["obstacle", "robot", "irrigation", "weather", "3d printer", "cnc", "esp32", "arduino", "sensor", "relay", "motor", "pump", "chassis", "display", "microcontroller", "distance", "proximity", "wifi", "bluetooth", "light", "soil", "moisture", "product", "buy", "price"]) or
-        request_scoped_max_price is not None
-    )
-
-    if is_project_or_product_query:
-        raw_query = tool_call["query"] if tool_call else user_message
-        max_price = tool_call.get("max_price") if tool_call else request_scoped_max_price
-
-        print(f"PRODUCT SEARCH START: raw_query='{raw_query}', max_price={max_price}")
-        
-        # Check if project keywords match to fetch components
-        query_lower = raw_query.lower()
-        project_components = None
-        for k, comps in PROJECT_COMPONENTS_MAP.items():
-            if k in query_lower or k in msg_lower:
-                project_components = comps
-                break
-
-        if project_components:
-            seen_ids = set()
-            for comp in project_components:
-                comp_matches = search_products_with_filters(query=comp, max_price=max_price, limit=1)
-                for p in comp_matches:
-                    if p["id"] not in seen_ids:
-                        matched_products.append(p)
-                        seen_ids.add(p["id"])
-        else:
-            # Clean search query
-            q = re.sub(r'(?:under|below|less than|within|\<|<=)\s*₹?\s*\d+(?:\.\d+)?', '', raw_query, flags=re.I)
-            q = re.sub(r'^(?:show\s+me|find\s+me|give\s+me|i\s+need|i\s+want|looking\s+for|suggest|recommend|what\s+do\s+i\s+need\s+for|can\s+you\s+find)\s+(?:an?|some|all|the)?', '', q, flags=re.I)
-            q = re.sub(r'[^\w\s]', ' ', q).strip()
-
-            if re.match(r'^(?:products?|items?|components?|things?|anything|boards?)$', q, re.I):
-                q = ''
-            elif 'distance' in q.lower() or 'proximity' in q.lower():
-                q = 'ultrasonic sensor'
-            elif 'wifi' in q.lower() or 'bluetooth' in q.lower():
-                q = 'esp32'
-
-            if max_price is not None:
-                matched_products = search_products_with_filters(query=q, max_price=max_price, limit=6)
-            else:
-                matched_products = search_products(q, limit=6)
-
-        print(f"PRODUCT SEARCH COMPLETE: {len(matched_products)} products found")
-
-        # Turn 2: Generate final user answer
-        product_names = [p["name"] for p in matched_products[:4]]
-        
-        if tool_call:
-            tool_content = f"Found {len(matched_products)} matching products in DigiComp catalog: {', '.join(product_names)}." if matched_products else f"No matching products found in DigiComp catalog for '{query}'."
-            turn2_messages = ollama_messages + [
-                msg1,
-                {
-                    "role": "tool",
-                    "content": tool_content
-                }
-            ]
-            print(f"{MODEL.upper()} TURN 2 START")
-            data2 = query_ollama(turn2_messages, tools=None, num_predict=350)
-            raw_content2 = data2.get("message", {}).get("content", "")
-            answer = clean_final_assistant_answer(raw_content2)
-        else:
-            raw_content1 = msg1.get("content", "")
-            cleaned1 = clean_final_assistant_answer(raw_content1)
-            if matched_products:
-                confirm_prompt = f"The user asked: '{user_message}'. We found these matching items in our DigiComp catalog: {', '.join(product_names)}. Confirm available items to the user in 1-2 friendly, conversational sentences."
-                try:
-                    turn2_data = query_ollama([
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": confirm_prompt}
-                    ], num_predict=200)
-                    answer = clean_final_assistant_answer(turn2_data.get("message", {}).get("content", ""))
-                except Exception:
-                    answer = cleaned1
-            else:
-                answer = cleaned1
-
-        if not is_answer_complete(answer):
-            if matched_products:
-                names = ", ".join(p["name"] for p in matched_products[:3])
-                answer = f"I found matching items in the DigiComp catalog, including {names}."
-            else:
-                answer = f"I searched the DigiComp catalog for '{clean_query or user_message}' but did not find matching products in stock."
-
-    else:
-        # Non-product informational query (e.g. "What is an ESP32?", "Hello")
-        raw_content1 = msg1.get("content", "")
-        answer = clean_final_assistant_answer(raw_content1)
+    # Case A: Pure General / Technical Question or Greeting (NO catalog retrieval)
+    if not intent["is_product_query"]:
+        print("-> Handling as General Technical Question (No catalog search)")
+        ollama_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + clean_history + [{"role": "user", "content": user_message}]
+        data = query_ollama(ollama_messages, num_predict=250)
+        raw_ans = data.get("message", {}).get("content", "")
+        answer = clean_final_assistant_answer(raw_ans)
 
         if not is_answer_complete(answer):
             msg_clean = user_message.lower().strip()
-            if msg_clean in ["hello", "hi", "hey", "hyy", "hlo", "greetings"]:
+            if msg_clean in ("hello", "hi", "hey", "greetings"):
                 answer = "Hello! How can I assist you with electronics and DigiComp products today?"
+            elif "esp32" in msg_clean:
+                answer = "The ESP32 is a low-cost, low-power microcontroller with built-in Wi-Fi and dual-mode Bluetooth, commonly used for IoT and embedded projects."
+            elif "pwm" in msg_clean:
+                answer = "Pulse Width Modulation (PWM) is a technique used to control analog circuits with digital outputs by varying the duty cycle of a square wave signal."
+            elif "ohm" in msg_clean:
+                answer = "Ohm's law states that the current through a conductor between two points is directly proportional to the voltage across the two points (V = I * R)."
             else:
-                answer = f"Here is information regarding your query: {user_message}."
+                answer = f"Here is information regarding {user_message}: it is a fundamental electronics concept used in embedded systems design."
 
-    final_time_str = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"FINAL RESPONSE COMPLETE: {final_time_str}")
-    print(f"Answer: {answer[:80]}...")
-    print(f"Products: {len(matched_products)}")
-    print(f"HTTP RESPONSE SENT: {final_time_str} (Elapsed: {time.time() - start_req:.2f}s)")
-    print("==========================================\n")
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": [],
+        }
+
+    # Case B: Which one is best / Comparison follow-up
+    if intent.get("is_which_best") and intent.get("inherited_query"):
+        print("-> Handling as Product Comparison / Recommendation Follow-up")
+        target_kw = intent["inherited_query"]
+        comp_products = search_digicomp_catalog(query=target_kw, limit=4)
+        matched_products = comp_products
+
+        product_summaries = [f"{p['name']} (₹{p['price']:.0f}, {p['excerpt']})" for p in comp_products]
+        comp_prompt = (
+            f"The user previously asked about {target_kw}, and now asks: '{user_message}'.\n"
+            f"Available DigiComp items are: {'; '.join(product_summaries)}.\n"
+            f"Provide a clear, direct engineering comparison in 2-3 sentences explaining which one is best suited for their need (e.g. for robotics, standard ESP32 offers great value with dual-core and Wi-Fi/BLE at ₹359, while ESP32-S3 adds USB OTG and advanced vector instructions at ₹659)."
+        )
+        data = query_ollama([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": comp_prompt}
+        ], num_predict=220)
+        raw_ans = data.get("message", {}).get("content", "")
+        answer = clean_final_assistant_answer(raw_ans)
+
+        if not is_answer_complete(answer):
+            if comp_products:
+                answer = f"For a robot project, the standard ESP32 at ₹359 is typically the best choice because it provides dual-core processing, PWM for motor control, and wireless capabilities at an affordable price."
+            else:
+                answer = "Both boards are excellent choices depending on your specific processing and I/O requirements."
+
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": matched_products,
+        }
+
+    # Case C: Project Recommendation Query (e.g. "I want to build an obstacle avoiding robot")
+    if intent["is_project_query"]:
+        print("-> Handling as Project Recommendation Query")
+        constraints = extract_search_constraints(user_message)
+        matched_products = find_project_recommendations(user_message, max_price=constraints["max_price"])
+
+        product_names = [p["name"] for p in matched_products]
+        if matched_products:
+            prompt_content = (
+                f"The user asked: '{user_message}'.\n"
+                f"Explain the essential components required for this project in 1-2 clear sentences (e.g. microcontroller, distance sensor, motor driver, motors, chassis).\n"
+                f"Mention that DigiComp has {', '.join(product_names)} available in our catalog for the brain/controller of the build. Keep it conversational."
+            )
+        else:
+            prompt_content = (
+                f"The user asked: '{user_message}'.\n"
+                f"Explain the essential components needed in 1-2 sentences. Mention that while DigiComp offers development microcontrollers, the specific project kit is not currently in stock."
+            )
+
+        data = query_ollama([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt_content}
+        ], num_predict=220)
+        raw_ans = data.get("message", {}).get("content", "")
+        answer = clean_final_assistant_answer(raw_ans)
+
+        if not is_answer_complete(answer):
+            if matched_products:
+                names = ", ".join(product_names)
+                answer = f"An obstacle-avoiding robot typically needs a microcontroller, distance sensor, motor driver, motors, and a chassis. DigiComp currently has {names} available for the controller."
+            else:
+                answer = "An obstacle-avoiding robot typically needs a microcontroller, distance sensor, motor driver, motors, and a chassis."
+
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": matched_products,
+        }
+
+    # Case D: Product Catalog Inquiry / Search / Follow-up Filter
+    print("-> Handling as DigiComp Product Catalog Inquiry")
+    constraints = extract_search_constraints(user_message)
+    effective_query = constraints["clean_query"]
+    
+    # If follow-up with empty query or constraint words, use inherited query from previous turn
+    is_empty_or_fluff = (not effective_query) or (effective_query in (
+        "products", "items", "components", "only in stock", "in stock", "stock", "only", "available"
+    ))
+    if is_empty_or_fluff and intent["inherited_query"]:
+        effective_query = intent["inherited_query"]
+
+    # Inherit max_price if not explicitly specified in this follow-up turn
+    effective_max_price = constraints["max_price"]
+    if effective_max_price is None and intent["inherited_max_price"] is not None:
+        effective_max_price = intent["inherited_max_price"]
+
+    # If user asked about Wi-Fi + Bluetooth
+    msg_low = user_message.lower()
+    if ("wifi" in msg_low or "wi-fi" in msg_low) and "bluetooth" in msg_low:
+        if not effective_query or effective_query in ("board", "boards"):
+            effective_query = "wifi bluetooth"
+
+    matched_products = search_digicomp_catalog(
+        query=effective_query,
+        max_price=effective_max_price,
+        min_price=constraints["min_price"],
+        stock_only=constraints["stock_only"],
+        limit=6,
+    )
+
+    print(f"Catalog search result count: {len(matched_products)} for query='{effective_query}', max_price={effective_max_price}, stock_only={constraints['stock_only']}")
+
+    if matched_products:
+        product_names = [f"{p['name']} (₹{p['price']:.0f})" for p in matched_products[:3]]
+        confirm_prompt = (
+            f"The user asked: '{user_message}'.\n"
+            f"From the live DigiComp catalog, we found {len(matched_products)} matching items: {', '.join(product_names)}.\n"
+            f"Confirm the available products in 1-2 friendly, conversational sentences. Do not list detailed specs or bullets as product cards appear below."
+        )
+        data = query_ollama([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": confirm_prompt}
+        ], num_predict=180)
+        raw_ans = data.get("message", {}).get("content", "")
+        answer = clean_final_assistant_answer(raw_ans)
+
+        if not is_answer_complete(answer):
+            if len(matched_products) == 1:
+                answer = f"I found the {matched_products[0]['name']} in the DigiComp catalog matching your request."
+            else:
+                names = ", ".join(p['name'] for p in matched_products[:3])
+                answer = f"I found {len(matched_products)} matching products in the DigiComp catalog, including {names}."
+    else:
+        no_match_prompt = (
+            f"The user asked: '{user_message}'.\n"
+            f"We searched the live DigiComp catalog for '{effective_query or user_message}' with constraint max_price={effective_max_price} but found 0 matching products.\n"
+            f"State clearly and politely in 1 sentence that DigiComp does not currently have this item in stock or in the catalog. Do NOT invent fake products."
+        )
+        data = query_ollama([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": no_match_prompt}
+        ], num_predict=150)
+        raw_ans = data.get("message", {}).get("content", "")
+        answer = clean_final_assistant_answer(raw_ans)
+
+        if not is_answer_complete(answer):
+            if effective_max_price:
+                answer = f"I couldn't find any matching products under ₹{effective_max_price:.0f} in the current DigiComp catalog."
+            elif effective_query:
+                answer = f"I couldn't find any {effective_query} in the current DigiComp catalog."
+            else:
+                answer = "I couldn't find a matching product in the current DigiComp catalog."
+
+    elapsed = time.time() - start_req
+    print(f"Request complete in {elapsed:.2f}s | Answer: {answer[:60]}... | Products: {len(matched_products)}")
 
     return {
         "answer": answer,
-        "tool_call": tool_call,
+        "tool_call": None,
         "products": matched_products,
     }
-

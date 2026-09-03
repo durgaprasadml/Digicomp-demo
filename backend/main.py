@@ -12,20 +12,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.db import (
-    init_db, seed_products, search_products, all_products,
+    init_db,
     get_all_conversations, get_conversation_by_id, create_conversation,
     update_conversation_title, delete_conversation, save_chat_message,
     create_user, get_user_by_email, verify_password, create_session,
     get_session, delete_session
 )
-from backend.products import PRODUCTS
-from backend.ai import process_chat_message, MODEL
+from backend.catalog_client import fetch_live_catalog
+from backend.ai import process_chat_message, clean_final_assistant_answer, MODEL
 
 FRONTEND = ROOT / "frontend"
 app = FastAPI(title="DigiComp AI Demo")
 if (FRONTEND / "public").exists():
     app.mount("/static", StaticFiles(directory=FRONTEND / "public"), name="static")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +37,8 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
-    seed_products(PRODUCTS)
+    # Pre-fetch and cache the live DigiComp catalog on startup
+    fetch_live_catalog()
 
 # Auth Dependency
 def get_current_user(request: Request):
@@ -146,71 +146,24 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     history: list[dict] | None = None
 
-def infer_search_query(message: str) -> str | None:
-    msg_lower = message.lower().strip()
-    non_products = ["hello", "hi", "hey", "thanks", "who invented", "what is pwm"]
-    if any(msg_lower.startswith(q) for q in non_products) and not any(k in msg_lower for k in ["product", "buy", "item"]):
-        return None
-    if "obstacle" in msg_lower or "robot" in msg_lower: return "obstacle avoiding robot"
-    if "3d printer" in msg_lower: return "3d printer"
-    if "irrigation" in msg_lower or "water pump" in msg_lower or "soil" in msg_lower: return "irrigation"
-    if "weather" in msg_lower or "dht22" in msg_lower: return "weather station"
-    if "esp32" in msg_lower: return "esp32"
-    if "arduino" in msg_lower or "uno" in msg_lower: return "arduino"
-    if "sensor" in msg_lower: return "sensor"
-    if "relay" in msg_lower: return "relay"
-    if "motor driver" in msg_lower or "l298n" in msg_lower: return "motor driver"
-    if "dc motor" in msg_lower or "motor" in msg_lower: return "dc motor"
-    if "stepper" in msg_lower: return "stepper"
-    if "chassis" in msg_lower: return "chassis"
-    return None
-
-def find_products_for_component(component_type: str, max_price=None, limit=2):
-    synonyms = {
-        "microcontroller": ["esp32", "arduino uno", "arduino nano", "microcontroller"],
-        "ultrasonic sensor": ["hc-sr04", "ultrasonic", "distance sensor"],
-        "motor driver": ["l298n", "a4988", "motor driver"],
-        "dc geared motor": ["dc geared motor", "dc motor", "geared motor"],
-        "dc motor": ["dc geared motor", "dc motor", "geared motor"],
-        "motor": ["dc geared motor", "nema17", "sg90"],
-        "robot chassis": ["2wd chassis", "4wd chassis", "robot chassis"],
-        "chassis": ["2wd chassis", "4wd chassis", "robot chassis"],
-        "battery": ["battery pack", "battery"],
-        "water pump": ["water pump", "pump"],
-        "relay": ["relay"],
-        "temperature sensor": ["dht22", "temperature"],
-        "humidity sensor": ["dht22", "humidity"],
-        "soil moisture sensor": ["soil moisture", "soil"],
-        "display": ["oled"],
-        "servo": ["sg90", "servo"],
-        "jumper wires": ["jumper"],
-    }
-    key = component_type.lower().strip()
-    terms = synonyms.get(key, [component_type])
-    results, seen = [], set()
-    for term in terms:
-        for p in search_products(term, limit=limit):
-            if p["id"] in seen:
-                continue
-            if max_price is not None and p["price"] > max_price:
-                continue
-            seen.add(p["id"])
-            results.append(p)
-            if len(results) >= limit:
-                return results
-    return results
-
 def product_payload(product, component_type=""):
+    """
+    Shapes the live DigiComp product dictionary into the payload consumed by the AI frontend.
+    """
     return {
         "id": product["id"],
-        "sku": product["sku"],
+        "sku": product.get("sku", ""),
         "name": product["name"],
-        "category": product["category"],
-        "description": product["description"],
+        "slug": product.get("slug", ""),
+        "category": product.get("category", "Hardware"),
+        "description": product.get("description") or product.get("excerpt") or "",
         "price": product["price"],
-        "stock": product["stock_quantity"] if "stock_quantity" in product else product.get("stock", 0),
-        "image_url": product["image_url"],
-        "product_url": product["product_url"],
+        "stock": product.get("stock", "instock"),
+        "stock_quantity": product.get("stock_quantity", 0),
+        "image_url": product.get("image_url", ""),
+        "product_url": product.get("product_url", f"/product/{product.get('slug', product['id'])}"),
+        "permalink": product.get("permalink", ""),
+        "attributes": product.get("attributes", {}),
         "component_type": component_type,
     }
 
@@ -226,10 +179,10 @@ def index():
         "docs_url": "/docs"
     }
 
-
 @app.get("/api/products")
 def products():
-    return all_products()
+    # Return live products from DigiComp catalog
+    return fetch_live_catalog()
 
 @app.get("/api/ai/health")
 def ai_health():
@@ -244,8 +197,6 @@ def ai_health():
             return {"backend": "ok", "ollama": "ok", "model": MODEL, "ready": False, "error": f"{MODEL} model not found"}
     except Exception as e:
         return {"backend": "ok", "ollama": "unreachable", "model": MODEL, "ready": False, "error": str(e)}
-
-from backend.ai import process_chat_message, clean_final_assistant_answer, MODEL
 
 @app.post("/api/chat")
 @app.post("/api/ai/chat")
@@ -263,8 +214,6 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
     print(f"User: {current_user.get('email')} ({current_user.get('id')})")
     print(f"Conversation ID: {conv_id}")
     print(f"User message: {message}")
-    print(f"API endpoint: /api/ai/chat")
-    print(f"Ollama: http://127.0.0.1:11434/api/chat")
     print(f"Active model: {MODEL}")
 
     try:
@@ -275,7 +224,7 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
         print("==========================================\n")
         raise HTTPException(
             status_code=503,
-            detail=f"Ollama AI service error: {exc}. Ensure Ollama is running and {MODEL} is available."
+            detail=f"DigiComp AI service error: {exc}. Ensure Ollama is running and {MODEL} is available."
         )
 
     raw_answer = ai_res.get("answer", "")
@@ -348,6 +297,3 @@ def save_message(conv_id: str, req: MessageSaveRequest, current_user: dict = Dep
     content_to_save = clean_final_assistant_answer(req.content) if req.role == "assistant" else req.content
     save_chat_message(req.id, conv_id, req.role, content_to_save, req.product_ids, user_id=current_user["id"])
     return {"id": req.id, "conversation_id": conv_id, "role": req.role, "content": content_to_save, "product_ids": req.product_ids}
-
-
-
