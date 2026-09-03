@@ -16,7 +16,7 @@ from backend.db import (
     get_all_conversations, get_conversation_by_id, create_conversation,
     update_conversation_title, delete_conversation, save_chat_message,
     create_user, get_user_by_email, verify_password, create_session,
-    get_session, delete_session
+    get_session, delete_session, update_conversation_product
 )
 from backend.catalog_client import fetch_live_catalog
 from backend.ai import process_chat_message, clean_final_assistant_answer, MODEL
@@ -28,7 +28,7 @@ if (FRONTEND / "public").exists():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,6 +145,9 @@ class ChatRequest(BaseModel):
     conversationId: str | None = None
     conversation_id: str | None = None
     history: list[dict] | None = None
+    product_context: dict | None = None
+    product_id: int | str | None = None
+    product_slug: str | None = None
 
 def product_payload(product, component_type=""):
     """
@@ -216,8 +219,23 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
     print(f"User message: {message}")
     print(f"Active model: {MODEL}")
 
+    # Extract and resolve product context
+    prod_context = req.product_context
+    if not prod_context and (req.product_slug or req.product_id):
+        from backend.catalog_client import fetch_single_product_details
+        prod_context = fetch_single_product_details(req.product_slug or req.product_id)
+
+    if not prod_context and conv_id:
+        existing_conv = get_conversation_by_id(conv_id, user_id=current_user["id"])
+        if existing_conv and existing_conv.get("product_context"):
+            prod_context = existing_conv["product_context"]
+
+    if prod_context and conv_id:
+        p_slug = req.product_slug or (prod_context.get("slug") if isinstance(prod_context, dict) else None)
+        update_conversation_product(conv_id, product_slug=p_slug, product_context=prod_context, user_id=current_user["id"])
+
     try:
-        ai_res = process_chat_message(message, history=req.history)
+        ai_res = process_chat_message(message, history=req.history, product_context=prod_context)
     except Exception as exc:
         print(f"ERROR: {exc}")
         traceback.print_exc()
@@ -250,6 +268,8 @@ def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
 class ConversationCreateRequest(BaseModel):
     id: str | None = None
     title: str = "New Chat"
+    product_slug: str | None = None
+    product_context: dict | None = None
 
 class ConversationRenameRequest(BaseModel):
     title: str
@@ -268,7 +288,13 @@ def list_conversations(q: str | None = None, current_user: dict = Depends(get_cu
 def new_conversation(req: ConversationCreateRequest, current_user: dict = Depends(get_current_user)):
     import time, random
     conv_id = req.id or f"conv-{int(time.time()*1000)}-{random.randint(1000, 9999)}"
-    return create_conversation(conv_id, req.title, user_id=current_user["id"])
+    return create_conversation(
+        conv_id, 
+        req.title, 
+        user_id=current_user["id"],
+        product_slug=req.product_slug,
+        product_context=req.product_context
+    )
 
 @app.get("/api/ai/conversations/{conv_id}")
 def get_conversation(conv_id: str, current_user: dict = Depends(get_current_user)):

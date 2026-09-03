@@ -11,8 +11,10 @@ DB_PATH = Path(__file__).resolve().parent.parent / "data" / "digicomp.db"
 
 def get_connection():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 def init_db():
@@ -65,6 +67,8 @@ def init_db():
             id TEXT PRIMARY KEY,
             user_id TEXT,
             title TEXT NOT NULL,
+            product_slug TEXT,
+            product_context TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -93,6 +97,11 @@ def init_db():
         if "user_id" not in columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id)")
+        if "product_slug" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN product_slug TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_product_slug ON conversations(product_slug)")
+        if "product_context" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN product_context TEXT")
     except Exception:
         pass
 
@@ -416,6 +425,11 @@ def get_conversation_by_id(conv_id, user_id=None):
         conn.close()
         return None
     conv = dict(c_row)
+    if conv.get("product_context") and isinstance(conv["product_context"], str):
+        try:
+            conv["product_context"] = json.loads(conv["product_context"])
+        except Exception:
+            pass
     
     m_rows = conn.execute("""
         SELECT * FROM messages 
@@ -451,17 +465,44 @@ def get_conversation_by_id(conv_id, user_id=None):
     conv["last_message"] = messages[-1]["text"] if messages else None
     return conv
 
-def create_conversation(conv_id, title="New Chat", user_id=None):
+def create_conversation(conv_id, title="New Chat", user_id=None, product_slug=None, product_context=None):
     conn = get_connection()
     now = datetime.utcnow().isoformat()
+    p_context_str = json.dumps(product_context) if isinstance(product_context, (dict, list)) else product_context
     conn.execute("""
-        INSERT INTO conversations (id, user_id, title, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-    """, (conv_id, user_id, title, now, now))
+        INSERT INTO conversations (id, user_id, title, product_slug, product_context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET 
+            updated_at = excluded.updated_at,
+            title = CASE WHEN excluded.title != 'New Chat' THEN excluded.title ELSE conversations.title END,
+            product_slug = COALESCE(excluded.product_slug, conversations.product_slug),
+            product_context = COALESCE(excluded.product_context, conversations.product_context)
+    """, (conv_id, user_id, title, product_slug, p_context_str, now, now))
     conn.commit()
     conn.close()
-    return {"id": conv_id, "user_id": user_id, "title": title, "created_at": now, "updated_at": now, "message_count": 0, "messages": []}
+    return {"id": conv_id, "user_id": user_id, "title": title, "product_slug": product_slug, "product_context": product_context, "created_at": now, "updated_at": now, "message_count": 0, "messages": []}
+
+def update_conversation_product(conv_id, product_slug=None, product_context=None, user_id=None):
+    conn = get_connection()
+    p_context_str = json.dumps(product_context) if isinstance(product_context, (dict, list)) else product_context
+    sql = "UPDATE conversations SET updated_at = CURRENT_TIMESTAMP"
+    params = []
+    if product_slug is not None:
+        sql += ", product_slug = ?"
+        params.append(product_slug)
+    if p_context_str is not None:
+        sql += ", product_context = ?"
+        params.append(p_context_str)
+    sql += " WHERE id = ?"
+    params.append(conv_id)
+    if user_id:
+        sql += " AND (user_id = ? OR user_id IS NULL)"
+        params.append(user_id)
+    cur = conn.execute(sql, params)
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
 
 def update_conversation_title(conv_id, title, user_id=None):
     conn = get_connection()

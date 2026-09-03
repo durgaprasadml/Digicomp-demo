@@ -224,7 +224,192 @@ def classify_user_intent(user_message: str, history: list = None) -> dict:
     }
 
 
-def process_chat_message(user_message: str, history: list = None) -> dict:
+
+def handle_product_specific_chat(user_message: str, history: list, product_context: dict) -> dict:
+    p_name = str(product_context.get("name", "")).strip()
+    p_id = product_context.get("id")
+    p_sku = str(product_context.get("sku", "")).strip()
+    p_cat = str(product_context.get("category", "")).strip()
+    if not p_cat and product_context.get("categories"):
+        p_cat = ", ".join(product_context["categories"])
+    
+    try:
+        p_price = float(product_context.get("price", 0))
+    except (ValueError, TypeError):
+        p_price = 0.0
+
+    try:
+        p_reg_price = float(product_context.get("regPrice", p_price))
+    except (ValueError, TypeError):
+        p_reg_price = p_price
+
+    p_stock = str(product_context.get("stock", "instock")).lower()
+    p_is_instock = p_stock in ("instock", "in_stock", "available")
+    p_stock_qty = product_context.get("stockQty") or product_context.get("stock_quantity") or 0
+
+    p_desc_raw = product_context.get("description") or product_context.get("excerpt") or ""
+    p_desc = re.sub(r'<[^>]+>', ' ', p_desc_raw).strip()
+    p_desc = re.sub(r'\s+', ' ', p_desc)
+
+    p_attrs = product_context.get("attributes") or {}
+    attrs_list = []
+    if isinstance(p_attrs, dict):
+        for k, v in p_attrs.items():
+            val_str = ", ".join(v) if isinstance(v, list) else str(v)
+            attrs_list.append(f"{k}: {val_str}")
+    attrs_formatted = "; ".join(attrs_list) if attrs_list else "None specified"
+
+    msg_lower = user_message.lower().strip()
+
+    # Sub-case 1: Cheaper Alternatives / Other Alternatives
+    is_cheaper = bool(re.search(r'\b(cheaper|cheapest|lower price|less expensive|budget|more affordable)\b', msg_lower))
+    is_alternative = bool(re.search(r'\b(alternative|alternatives|other options?|similar (?:boards?|products?|items?)|substitute|other (?:mcu|board|boards|fpga|sbc))\b', msg_lower))
+    if is_cheaper or is_alternative:
+        matched_products = []
+        max_p = (p_price - 1) if (is_cheaper and p_price > 0) else None
+        
+        search_terms = []
+        if p_cat and p_cat.lower() not in ("hardware", "uncategorized"):
+            search_terms.append(p_cat)
+        for kw in ("esp32", "rp2040", "mcu", "microcontroller", "fpga", "sbc", "sensor", "motor"):
+            if kw in p_name.lower():
+                search_terms.append(kw)
+                break
+
+        query_term = search_terms[0] if search_terms else ""
+        raw_candidates = search_digicomp_catalog(query=query_term, max_price=max_p, limit=8)
+        
+        # Exclude current product
+        matched_products = [
+            p for p in raw_candidates 
+            if p.get("id") != p_id and p.get("name", "").lower() != p_name.lower()
+        ][:4]
+
+        if is_cheaper and not matched_products and max_p and max_p > 0:
+            broader = search_digicomp_catalog(query="", max_price=max_p, limit=6)
+            matched_products = [
+                p for p in broader 
+                if p.get("id") != p_id and p.get("name", "").lower() != p_name.lower()
+            ][:4]
+
+        if matched_products:
+            names = ", ".join(f"{p['name']} (₹{p['price']:.0f})" for p in matched_products[:3])
+            if is_cheaper:
+                answer = f"Here are cheaper alternatives from the DigiComp catalog: {names}."
+            else:
+                answer = f"Here are relevant alternative products from the DigiComp catalog: {names}."
+        else:
+            if is_cheaper:
+                answer = f"I couldn't find any cheaper alternatives in the current DigiComp catalog for {p_name}."
+            else:
+                answer = f"I couldn't find other alternative products currently available in the DigiComp catalog for this category."
+
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": matched_products,
+        }
+
+    # Sub-case 2: Price / Cost Query
+    is_price_q = bool(re.search(r'\b(price|cost|how much|how expensive|rate|mrp|discount)\b', msg_lower)) and not any(k in msg_lower for k in ("cheaper", "alternative"))
+    if is_price_q:
+        if p_reg_price > p_price and p_price > 0:
+            answer = f"The {p_name} is priced at ₹{p_price:.0f} (discounted from the regular price of ₹{p_reg_price:.0f}) on DigiComp."
+        elif p_price > 0:
+            answer = f"The {p_name} is priced at ₹{p_price:.0f} on DigiComp."
+        else:
+            answer = f"The price for {p_name} is available on the product page."
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": [],
+        }
+
+    # Sub-case 3: Stock / Inventory Status
+    is_stock_q = bool(re.search(r'\b(in stock|out of stock|available|availability|units? available|stock status|ready to ship)\b', msg_lower))
+    if is_stock_q:
+        if p_is_instock:
+            qty_text = f" ({p_stock_qty} items in stock)" if p_stock_qty else " and ready to ship"
+            answer = f"Yes, the {p_name} is currently in stock{qty_text} from DigiComp."
+        else:
+            answer = f"The {p_name} is currently out of stock in the DigiComp store."
+        return {
+            "answer": answer,
+            "tool_call": None,
+            "products": [],
+        }
+
+    # Sub-case 4: Specific Missing Specification Query
+    missing_spec_keywords = {
+        "weight": "weight",
+        "dimensions": "dimensions",
+        "dimension": "dimensions",
+        "size": "dimensions",
+        "color": "color",
+        "temperature range": "temperature range",
+        "operating temperature": "operating temperature",
+        "ethernet": "Ethernet",
+        "battery": "battery",
+        "warranty": "warranty",
+    }
+    asked_missing_spec = None
+    all_known_text = (p_name + " " + p_desc + " " + attrs_formatted).lower()
+    for kw, label in missing_spec_keywords.items():
+        if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower):
+            if kw not in all_known_text:
+                asked_missing_spec = label
+                break
+
+    # Sub-case 5: Technical Specifications, Overview, Applications, Compatibility, Project Suitability
+    prompt_content = f"""You are DigiComp AI, answering questions specifically about this DigiComp product:
+Product: {p_name} (SKU: {p_sku})
+Category: {p_cat}
+Price: ₹{p_price:.0f}
+Stock: {'In Stock' if p_is_instock else 'Out of Stock'}
+Overview: {p_desc}
+Technical Specifications: {attrs_formatted}
+
+User Question: {user_message}
+
+Rules:
+1. 'this', 'it', 'the product', 'the board' refer strictly to {p_name}.
+2. Ground your answer strictly in the DigiComp product information provided above.
+3. If the user asks for a specific specification that is not listed in the product information, state: "I couldn't find that specification in the DigiComp product information." Do not guess or hallucinate.
+4. Keep the answer clear, helpful, and concise (1-3 sentences).
+5. Output ONLY the clean answer with NO thinking tags, NO reasoning, and NO tool calls."""
+
+    data = query_ollama([
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt_content}
+    ], num_predict=220)
+    raw_ans = data.get("message", {}).get("content", "")
+    answer = clean_final_assistant_answer(raw_ans)
+
+    if asked_missing_spec and (not is_answer_complete(answer) or "couldn't find that specification" not in answer.lower()):
+        answer = "I couldn't find that specification in the DigiComp product information."
+
+    if not is_answer_complete(answer):
+        if "what is" in msg_lower or "tell me about" in msg_lower:
+            answer = f"The {p_name} is a {p_cat} available from DigiComp. {p_desc}"
+        elif "spec" in msg_lower:
+            answer = f"The specifications for {p_name} include: {attrs_formatted}."
+        elif "robot" in msg_lower:
+            answer = f"Yes, the {p_name} can be used for robotics projects requiring {attrs_formatted or 'microcontroller control'}."
+        elif "cnc" in msg_lower:
+            answer = f"The {p_name} can be used in CNC controller designs depending on your motor driver and firmware requirements."
+        elif "beginner" in msg_lower:
+            answer = f"The {p_name} is suitable for developers and hobbyists looking to build projects with {p_cat} hardware."
+        else:
+            answer = f"The {p_name} is a {p_cat} from DigiComp ({p_desc or 'ready for embedded and electronics applications'})."
+
+    return {
+        "answer": answer,
+        "tool_call": None,
+        "products": [],
+    }
+
+
+def process_chat_message(user_message: str, history: list = None, product_context: dict = None) -> dict:
     import datetime, time
     start_req = time.time()
 
@@ -238,6 +423,11 @@ def process_chat_message(user_message: str, history: list = None) -> dict:
                     clean_content = clean_final_assistant_answer(str(h["content"]))[:300]
                     if clean_content:
                         clean_history.append({"role": role, "content": clean_content})
+
+    # Handle product-specific chat when product_context is provided
+    if product_context and isinstance(product_context, dict) and product_context.get("name"):
+        print(f"-> Handling as Product-Specific Chat for: {product_context.get('name')}")
+        return handle_product_specific_chat(user_message, clean_history, product_context)
 
     # 2. Classify intent
     intent = classify_user_intent(user_message, history=clean_history)
